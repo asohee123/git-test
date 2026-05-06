@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        ACR_NAME        = 'your-acr-name'
+        ACR_NAME        = 'demoAcrParkjh'
         ACR_REGISTRY    = "${ACR_NAME}.azurecr.io"
         IMAGE_NAME      = 'git-test-app'
         IMAGE_TAG       = "${BUILD_NUMBER}"
