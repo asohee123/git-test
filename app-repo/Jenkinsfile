@@ -1,17 +1,34 @@
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:debug
+    command: ['sleep', '9999999']
+    volumeMounts:
+    - name: docker-config
+      mountPath: /kaniko/.docker
+  - name: git-tools
+    image: alpine/git
+    command: ['sleep', '9999999']
+  volumes:
+  - name: docker-config
+    secret:
+      secretName: acr-docker-secret   # 사전에 kubectl로 생성 필요 (아래 가이드 참고)
+"""
+        }
+    }
 
     environment {
-        // =============================================
-        // ⚙️  여기만 본인 환경에 맞게 수정하세요
-        // =============================================
         ACR_NAME       = "demoAcrParkjh"
         ACR_LOGIN_URL  = "${ACR_NAME}.azurecr.io"
         APP_NAME       = "parkjh-cicd-test"
         GITHUB_CRED_ID = "github-credentials"
-        ACR_CRED_ID    = "acr-service-principal"
         GITHUB_REPO    = "asohee123/git-test"
-        // =============================================
     }
 
     stages {
@@ -26,23 +43,14 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build & Push (Kaniko)') {
             steps {
-                sh "docker build -t ${env.FULL_IMAGE} ./app-repo"
-            }
-        }
-
-        stage('Push to ACR') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: ACR_CRED_ID,
-                    usernameVariable: 'ACR_USER',
-                    passwordVariable: 'ACR_PASS'
-                )]) {
+                container('kaniko') {
                     sh """
-                        docker login ${ACR_LOGIN_URL} -u \$ACR_USER -p \$ACR_PASS
-                        docker push ${env.FULL_IMAGE}
-                        docker logout ${ACR_LOGIN_URL}
+                        /kaniko/executor \
+                            --context=dir://${WORKSPACE}/app-repo \
+                            --dockerfile=${WORKSPACE}/app-repo/Dockerfile \
+                            --destination=${env.FULL_IMAGE}
                     """
                 }
             }
@@ -50,22 +58,24 @@ pipeline {
 
         stage('Update Manifest') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: GITHUB_CRED_ID,
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_TOKEN'
-                )]) {
-                    sh """
-                        sed -i "s|${ACR_LOGIN_URL}/${APP_NAME}:.*|${env.FULL_IMAGE}|g" \
-                            manifest-repo/deployment.yaml
+                container('git-tools') {
+                    withCredentials([usernamePassword(
+                        credentialsId: GITHUB_CRED_ID,
+                        usernameVariable: 'GIT_USER',
+                        passwordVariable: 'GIT_TOKEN'
+                    )]) {
+                        sh """
+                            sed -i "s|${ACR_LOGIN_URL}/${APP_NAME}:.*|${env.FULL_IMAGE}|g" \
+                                manifest-repo/deployment.yaml
 
-                        git config user.email "jenkins@ci.local"
-                        git config user.name  "Jenkins CI"
-                        git remote set-url origin https://\$GIT_USER:\$GIT_TOKEN@github.com/${GITHUB_REPO}.git
-                        git add manifest-repo/deployment.yaml
-                        git commit -m "ci: update image to ${env.GIT_SHORT_SHA} [skip ci]"
-                        git push origin main
-                    """
+                            git config user.email "jenkins@ci.local"
+                            git config user.name  "Jenkins CI"
+                            git remote set-url origin https://\$GIT_USER:\$GIT_TOKEN@github.com/${GITHUB_REPO}.git
+                            git add manifest-repo/deployment.yaml
+                            git commit -m "ci: update image to ${env.GIT_SHORT_SHA} [skip ci]"
+                            git push origin main
+                        """
+                    }
                 }
             }
         }
@@ -74,6 +84,5 @@ pipeline {
     post {
         success { echo "✅ 완료: ${env.FULL_IMAGE}" }
         failure { echo "❌ 실패" }
-        always  { sh "docker rmi ${env.FULL_IMAGE} || true" }
     }
 }
