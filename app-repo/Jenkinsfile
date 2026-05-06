@@ -2,56 +2,69 @@ pipeline {
     agent any
 
     environment {
-        ACR_NAME        = 'demoAcrParkjh'
-        ACR_REGISTRY    = "${ACR_NAME}.azurecr.io"
-        IMAGE_NAME      = 'git-test-app'
-        IMAGE_TAG       = "${BUILD_NUMBER}"
-        MANIFEST_REPO   = 'https://gitlab.com/your-group/manifest-repo.git'
-        MANIFEST_BRANCH = 'main'
+        // =============================================
+        // ⚙️  여기만 본인 환경에 맞게 수정하세요
+        // =============================================
+        ACR_NAME       = "demoAcrParkjh"
+        ACR_LOGIN_URL  = "${ACR_NAME}.azurecr.io"
+        APP_NAME       = "your-app-name"
+        GITHUB_CRED_ID = "github-credentials"
+        ACR_CRED_ID    = "acr-service-principal"
+        GITHUB_REPO    = "asohee123/git-test"
+        // =============================================
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    env.GIT_SHORT_SHA = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.FULL_IMAGE    = "${ACR_LOGIN_URL}/${APP_NAME}:${env.GIT_SHORT_SHA}"
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh "docker build -t ${ACR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} ."
+                sh "docker build -t ${env.FULL_IMAGE} ./app-repo"
             }
         }
 
         stage('Push to ACR') {
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: 'acr-credentials',
+                    credentialsId: ACR_CRED_ID,
                     usernameVariable: 'ACR_USER',
                     passwordVariable: 'ACR_PASS'
                 )]) {
-                    sh "docker login ${ACR_REGISTRY} -u ${ACR_USER} -p ${ACR_PASS}"
-                    sh "docker push ${ACR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+                    sh """
+                        docker login ${ACR_LOGIN_URL} -u \$ACR_USER -p \$ACR_PASS
+                        docker push ${env.FULL_IMAGE}
+                        docker logout ${ACR_LOGIN_URL}
+                    """
                 }
             }
         }
 
-        stage('Update Manifest Repo') {
+        stage('Update Manifest') {
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: 'gitlab-credentials',
+                    credentialsId: GITHUB_CRED_ID,
                     usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_PASS'
+                    passwordVariable: 'GIT_TOKEN'
                 )]) {
                     sh """
-                        git clone https://${GIT_USER}:${GIT_PASS}@${MANIFEST_REPO.replace('https://', '')} manifest
-                        cd manifest
-                        sed -i 's|image: .*|image: ${ACR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}|' deployment.yaml
-                        git config user.email 'jenkins@ci.com'
-                        git config user.name 'Jenkins'
-                        git add deployment.yaml
-                        git commit -m 'Update image tag to ${IMAGE_TAG}'
-                        git push origin ${MANIFEST_BRANCH}
+                        sed -i "s|${ACR_LOGIN_URL}/${APP_NAME}:.*|${env.FULL_IMAGE}|g" \
+                            manifest-repo/deployment.yaml
+
+                        git config user.email "jenkins@ci.local"
+                        git config user.name  "Jenkins CI"
+                        git remote set-url origin https://\$GIT_USER:\$GIT_TOKEN@github.com/${GITHUB_REPO}.git
+                        git add manifest-repo/deployment.yaml
+                        git commit -m "ci: update image to ${env.GIT_SHORT_SHA} [skip ci]"
+                        git push origin main
                     """
                 }
             }
@@ -59,8 +72,8 @@ pipeline {
     }
 
     post {
-        always {
-            sh "docker rmi ${ACR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} || true"
-        }
+        success { echo "✅ 완료: ${env.FULL_IMAGE}" }
+        failure { echo "❌ 실패" }
+        always  { sh "docker rmi ${env.FULL_IMAGE} || true" }
     }
 }
