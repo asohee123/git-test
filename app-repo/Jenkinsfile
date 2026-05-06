@@ -7,7 +7,7 @@ pipeline {
         // =============================================
         ACR_NAME       = "demoAcrParkjh"
         ACR_LOGIN_URL  = "${ACR_NAME}.azurecr.io"
-        APP_NAME       = "your-app-name"
+        APP_NAME       = "parkjh-cicd-test"
         GITHUB_CRED_ID = "github-credentials"
         ACR_CRED_ID    = "acr-service-principal"
         GITHUB_REPO    = "asohee123/git-test"
